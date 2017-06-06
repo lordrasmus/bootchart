@@ -30,6 +30,8 @@ from functools import reduce
 from .samples import *
 from .process_tree import ProcessTree
 
+from pprint import pprint
+
 if sys.version_info >= (3, 0):
     long = int
 
@@ -88,6 +90,7 @@ class Trace:
                                            False, None, None, True)
 
     def valid(self):
+        pprint( self.headers )
         return self.headers != None and self.disk_stats != None and \
                self.ps_stats != None and self.cpu_stats != None
 
@@ -418,28 +421,43 @@ def _parse_taskstats_log(writer, file):
     return ProcessStats (writer, processMap, len (timed_blocks), avgSampleLength, startTime, ltime)
 
 def _parse_proc_stat_log(file):
-    samples = []
-    ltimes = None
+    samples = {}
+    last_times = {}
     for time, lines in _parse_timed_blocks(file):
+        #pprint( lines )
         # skip emtpy lines
         if not lines:
             continue
-        tokens = lines[0].split()
-        if len(tokens) < 8:
-            continue
-        # CPU times {user, nice, system, idle, io_wait, irq, softirq}
-        times = [ int(token) for token in tokens[1:] ]
-        if ltimes:
-            user = float((times[0] + times[1]) - (ltimes[0] + ltimes[1]))
-            system = float((times[2] + times[5] + times[6]) - (ltimes[2] + ltimes[5] + ltimes[6]))
-            idle = float(times[3] - ltimes[3])
-            iowait = float(times[4] - ltimes[4])
+        
+        for line in lines:
+            tokens = line.split()
+            if len(tokens) < 8:
+                continue
+            # CPU times {user, nice, system, idle, io_wait, irq, softirq}
+            if not tokens[0].startswith("cpu"): continue
+            
+            #print( tokens[0] )
+            if not tokens[0] in samples:
+                samples[tokens[0]] = []
+                last_times[tokens[0]] = []
+                    
+            times = [ int(token) for token in tokens[1:] ]
+            ltimes = last_times[tokens[0]]
+            if ltimes:
+                user = float((times[0] + times[1]) - (ltimes[0] + ltimes[1]))
+                system = float((times[2] + times[5] + times[6]) - (ltimes[2] + ltimes[5] + ltimes[6]))
+                idle = float(times[3] - ltimes[3])
+                iowait = float(times[4] - ltimes[4])
 
-            aSum = max(user + system + idle + iowait, 1)
-            samples.append( CPUSample(time, user/aSum, system/aSum, iowait/aSum) )
+                aSum = max(user + system + idle + iowait, 1)
+                
+                samples[tokens[0]].append( CPUSample(time, user/aSum, system/aSum, iowait/aSum) )
 
-        ltimes = times
-        # skip the rest of statistics lines
+            # hier die letzen zeiten speichern
+            last_times[tokens[0]] = times
+            
+    
+    #pprint ( samples )
     return samples
 
 def _parse_proc_disk_stat_log(file, numCpu):

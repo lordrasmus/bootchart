@@ -174,26 +174,13 @@ close_wait_pid (DumpState *s, int avoid_kill)
 
 static void dump_buffers (DumpState *s)
 {
-	int i, max_chunk;
 	size_t bytes_dumped = 0;
 
-	/* if we wrapped around, the last chunk is probably unhelpful
-	   to parse, due to dis-continuous data, discard it */
-	max_chunk = MIN (s->map.max_chunk, sizeof (s->map.chunks)/sizeof(s->map.chunks[0]) - 1);
+	ws_list_iterator_start( s->map.chunk_list );
   
-	log ("reading %d chunks (of %d) ...\n", max_chunk, s->map.max_chunk);
-	for (i = 0; i < max_chunk; i++) {
-		FILE *output;
-		char buffer[CHUNK_SIZE];
-		Chunk *c = (Chunk *)&buffer;
-		size_t addr = (size_t) s->map.chunks[i];
-
-		lseek (s->mem, addr, SEEK_SET);
-		read (s->mem, &buffer, CHUNK_SIZE);
-		/*      log ("type: '%s' len %d\n",
-			c->dest_stream, (int)c->length); */
-
-		output = fopen (c->dest_stream, "a+");
+	Chunk *c; 
+	while( c = ws_list_iterator_next( s->map.chunk_list ) ){
+		FILE *output = fopen (c->dest_stream, "a+");
 		fwrite (c->data, 1, c->length, output);
 		bytes_dumped += c->length;
 		fclose (output);

@@ -285,6 +285,7 @@ def extents(options, xscale, trace):
 		h += header_h
 	if proc_tree.taskstats and options.cumulative:
 		h += CUML_HEIGHT + 4 * off_y
+	h+=350
 	return (w, h)
 
 def clip_visible(clip, rect):
@@ -308,21 +309,43 @@ def render_charts(ctx, options, clip, trace, curr_y, w, h, sec_w):
 	if clip_visible (clip, chart_rect):
 		draw_box_ticks (ctx, chart_rect, sec_w)
 		draw_annotations (ctx, proc_tree, trace.times, chart_rect)
-		draw_chart (ctx, IO_COLOR, True, chart_rect, \
-			    [(sample.time, sample.user + sample.sys + sample.io) for sample in trace.cpu_stats], \
-			    proc_tree, None)
+		draw_chart (ctx, IO_COLOR, True, chart_rect, [(sample.time, sample.user + sample.sys + sample.io) for sample in trace.cpu_stats["cpu"]], proc_tree, None)
+		
 		# render CPU load
-		draw_chart (ctx, CPU_COLOR, True, chart_rect, \
-			    [(sample.time, sample.user + sample.sys) for sample in trace.cpu_stats], \
-			    proc_tree, None)
-
+		draw_chart (ctx, CPU_COLOR, True, chart_rect,[(sample.time, sample.user + sample.sys) for sample in trace.cpu_stats["cpu"]], proc_tree, None)
+	
+	
 	curr_y = curr_y + 30 + bar_h
+	
+	counter = 0
+	
+	while True:
+		
+		key = "cpu" + str(counter)
+	
+		if not key in trace.cpu_stats:
+			break
+		
+		draw_legend_box(ctx, "CPU " + str(counter) + " (user+sys)", CPU_COLOR, off_x, curr_y+20, leg_s)
+		draw_legend_box(ctx, "I/O " + str(counter) + " (wait)", IO_COLOR, off_x + 120, curr_y+20, leg_s)
+		chart_rect = (off_x, curr_y+30, w, bar_h)
+		if clip_visible (clip, chart_rect):
+			draw_box_ticks (ctx, chart_rect, sec_w)
+			draw_annotations (ctx, proc_tree, trace.times, chart_rect)
+			draw_chart (ctx, IO_COLOR, True, chart_rect, [(sample.time, sample.user + sample.sys + sample.io) for sample in trace.cpu_stats[key]], proc_tree, None)
+			
+			# render CPU load
+			draw_chart (ctx, CPU_COLOR, True, chart_rect,[(sample.time, sample.user + sample.sys) for sample in trace.cpu_stats[key]], proc_tree, None)
+
+		curr_y = curr_y + 30 + bar_h
+		
+		counter+=1
 
 	# render second chart
 	draw_legend_line(ctx, "Disk throughput", DISK_TPUT_COLOR, off_x, curr_y+20, leg_s)
 	draw_legend_box(ctx, "Disk utilization", IO_COLOR, off_x + 120, curr_y+20, leg_s)
 
-        # render I/O utilization
+    # render I/O utilization
 	chart_rect = (off_x, curr_y+30, w, bar_h)
 	if clip_visible (clip, chart_rect):
 		draw_box_ticks (ctx, chart_rect, sec_w)
@@ -407,8 +430,11 @@ def render(ctx, options, xscale, trace):
 	else:
 		curr_y = off_y;
 
+	
 	if options.charts:
 		curr_y = render_charts (ctx, options, clip, trace, curr_y, w, h, sec_w)
+
+	curr_y += 50
 
 	# draw process boxes
 	proc_height = h
@@ -418,7 +444,7 @@ def render(ctx, options, xscale, trace):
 	draw_process_bar_chart(ctx, clip, options, proc_tree, trace.times,
 			       curr_y, w, proc_height, sec_w)
 
-	curr_y = proc_height
+	curr_y = proc_height # + 350  #curr_y
 	ctx.set_font_size(SIG_FONT_SIZE)
 	draw_text(ctx, SIGNATURE, SIG_COLOR, off_x + 5, proc_height - 8)
 

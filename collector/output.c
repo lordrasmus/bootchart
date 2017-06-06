@@ -33,23 +33,18 @@ static Chunk *chunk_alloc (StackMap *sm, const char *dest)
 
 	pthread_mutex_lock (&guard);
 
-	/* if we run out of buffer, just keep writing to the last buffer */
-	if (sm->max_chunk == sizeof (sm->chunks)/sizeof(sm->chunks[0])) {
-		static int overflowed = 0;
-		if (!overflowed) {
-			log ("bootchart-collector - internal buffer overflow! "
-				 "did you set hz too high, or is your boot time too long ?\n");
-			overflowed = 1;
-		}
-		c = sm->chunks[sm->max_chunk - 1];
-		c->length = 0;
-	} else {
-		c = calloc (CHUNK_SIZE, 1);
-		strncpy (c->dest_stream, dest, sizeof (c->dest_stream));
-		c->length = 0;
-		sm->chunks[sm->max_chunk++] = c;
+	
+	c = calloc (CHUNK_SIZE, 1);
+	strncpy (c->dest_stream, dest, sizeof (c->dest_stream));
+	c->length = 0;
+	
+	if ( sm->chunk_list == 0 ){
+		sm->chunk_list = malloc( sizeof( list_t ));
+		ws_list_init( sm->chunk_list );
 	}
-
+	
+	ws_list_append( sm->chunk_list, c );
+		
 	pthread_mutex_unlock (&guard);
 	return c;
 }

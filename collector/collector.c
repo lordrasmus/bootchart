@@ -62,6 +62,8 @@ get_pid_entry (pid_t pid)
 	return pids + pid;
 }
 
+static int keep_running = 1;
+
 /* Netlink socket-set bits */
 static int   netlink_socket = -1;
 static __u16 netlink_taskstats_id;
@@ -238,6 +240,15 @@ get_tgid_taskstats (PidScanner *scanner)
 	return &tgits;
 }
 
+struct task_startup_info{
+	int use;
+	char comm[TS_COMM_LEN];
+	uint64_t cpu_run_real_total, blkio_delay_total, swapin_delay_total;
+};
+
+static struct task_startup_info startup_infos[32768 + 1];
+
+
 /*
  * Linux exports one set of quite good data in:
  *   /proc/./stat: linux/fs/proc/array.c (do_task_stat)
@@ -258,6 +269,9 @@ dump_taskstat (BufferFile *file, PidScanner *scanner)
 	ts = get_tgid_taskstats (scanner);
 	if (!ts) /* process exited before we got there */
 		return;
+		
+	if ( 0 == strcmp( ts->ac_comm,  "chrome"))
+		return;
 
 	/* reduce the amount of parsing we have to do later */
 	entry = get_pid_entry (ts->ac_pid);
@@ -273,18 +287,94 @@ dump_taskstat (BufferFile *file, PidScanner *scanner)
 	ppid = pid_scanner_get_cur_ppid (scanner);
 	if (!ppid)
 		ppid = ts->ac_ppid;
+	
+	// delays von prozessen die beim start vorhanden waren abziehen
+	if ( startup_infos[ts->ac_pid].use == 1){
+		if ( 0 != strcpy( startup_infos[ts->ac_pid].comm, ts->ac_comm) ){
+			startup_infos[ts->ac_pid].use = 0;
+		}else{
+			ts->cpu_run_real_total -= startup_infos[ts->ac_pid].cpu_run_real_total -1;
+			ts->blkio_delay_total  -= startup_infos[ts->ac_pid].blkio_delay_total -1;
+			ts->swapin_delay_total -= startup_infos[ts->ac_pid].swapin_delay_total -1;
+		}
+	}
 
 	/* NB. ensure we aggregate all fields we need in get_tgid_tasstats */
-	output_len = snprintf (output_line, 1024, "%d %d %s %lld %lld %lld\n",
+	output_len = snprintf (output_line, 1024, "%d %d %s %ld %ld %ld\n",
 			       ts->ac_pid, ppid, ts->ac_comm,
-			       (long long)ts->cpu_run_real_total,
-			       (long long)ts->blkio_delay_total,
-			       (long long)ts->swapin_delay_total);
+			       (uint64_t)ts->cpu_run_real_total,
+			       (uint64_t)ts->blkio_delay_total,
+			       (uint64_t)ts->swapin_delay_total);
 	if (output_len < 0)
 		return;
 
 	buffer_file_append (file, output_line, output_len);
 
+/*	   FIXME - can we get better stats on what is waiting for what ?
+	   'blkio_count / blkio_delay_total' ... [etc.]
+	   'delay waiting for CPU while runnable' ... [!] fun :-) */
+		
+	/* The data we get from /proc is: */
+	/*
+	  opid, cmd, state, ppid = float(tokens[0]), ' '.join(tokens[1:2+offset]), tokens[2+offset], int(tokens[3+offset])
+	  userCpu, sysCpu, stime= int(tokens[13+offset]), int(tokens[14+offset]), int(tokens[21+offset]) */
+		
+	/* opid - our pid - ac_pid easy */
+	/* cmd - easy */
+	/* synthetic state ? ... - can we get something better ? */
+	/* 'state' - 'S' or ... */
+	/* instead we really want the I/O delay rendered I think */
+	/* Grief - how reliable & rapidly updated is the "state" information ? */
+/*		+ ho hum ! + - the big flaw ? */
+	/* ppid - parent pid - ac_ppid easy */
+	/* userCpu, sysCPU - we can only get the sum of these: cpu_run_real_total in ns */
+	/* though we could - approximate this with ac_utime / ac_stime in 'usec' */
+	/* just output 0 for sysCPU ? */
+	/* 'stime' - nothing doing ... - no start time data here ... */
+}
+
+
+
+static void init_startup_taskstat ( PidScanner *scanner )
+{
+	pid_t ppid;
+	PidEntry *entry;
+	__u64 time_total;
+	struct taskstats *ts;
+	
+	ts = get_tgid_taskstats (scanner);
+	if (!ts) /* process exited before we got there */
+		return;
+		
+	/* reduce the amount of parsing we have to do later */
+	entry = get_pid_entry (ts->ac_pid);
+	time_total = (ts->cpu_run_real_total + ts->blkio_delay_total +
+		      ts->swapin_delay_total);
+	if (entry->time_total == time_total && entry->ppid == ts->ac_ppid)
+		return;
+	entry->time_total = time_total;
+
+	entry->ppid = ts->ac_ppid;
+
+	/* we can get a much cleaner ppid from PROC_EVENTS */
+	ppid = pid_scanner_get_cur_ppid (scanner);
+	if (!ppid)
+		ppid = ts->ac_ppid;
+
+	
+	printf("init_startup_taskstat : %d %d %s %ld %ld %ld\n",
+			       ts->ac_pid, ppid, ts->ac_comm,
+			       (uint64_t)ts->cpu_run_real_total,
+			       (uint64_t)ts->blkio_delay_total,
+			       (uint64_t)ts->swapin_delay_total);
+	
+	startup_infos[ts->ac_pid].use = 1;
+	strcpy( startup_infos[ts->ac_pid].comm, ts->ac_comm);
+	startup_infos[ts->ac_pid].cpu_run_real_total = ts->cpu_run_real_total;
+	startup_infos[ts->ac_pid].blkio_delay_total  = ts->blkio_delay_total;
+	startup_infos[ts->ac_pid].swapin_delay_total = ts->swapin_delay_total;
+	
+	
 /*	   FIXME - can we get better stats on what is waiting for what ?
 	   'blkio_count / blkio_delay_total' ... [etc.]
 	   'delay waiting for CPU while runnable' ... [!] fun :-) */
@@ -493,118 +583,9 @@ error:
 	return 0;
 }
 
-static int
-am_in_initrd (void)
-{
-	FILE *mi;
-	int ret = 0;
-	char buffer[4096];
-
-	mi = fopen (PROC_PATH "/self/mountinfo", "r");
-	if (!mi)
-		return ret;
-
-	/* find a single mount; parent of itself: an initrd */
-	while (fgets (buffer, 4096, mi)) {
-		/* we expect: "1 1 0:1 / / rw - rootfs rootfs rw" */
-		if (!strncmp (buffer, "1 1 ", 4)) {
-			ret = 1;
-			break;
-		}
-	}
-	fclose (mi);
-
-	log ("bootchart-collector run %sside initrd\n", ret ? "in" : "out");
-	return ret;
-}
 
 
-static int
-have_dev_tmpfs (void)
-{
-	FILE *mi;
-	int ret = 0;
-	char buffer[4096];
 
-	mi = fopen (PROC_PATH "/self/mountinfo", "r");
-	if (!mi)
-		return ret;
-
-	/* find a single mount; parent of itself: an initrd */
-	while (fgets (buffer, 4096, mi)) {
-		/* we expect: "17 1 0:15 / /dev rw,relatime - tmpfs udev rw,nr_inodes=0,mode=755 */
-		if (strstr (buffer, "/dev") &&
-		    strstr (buffer, "rw") &&
-		    strstr (buffer, "tmpfs")) {
-			ret = 1;
-			break;
-		}
-	}
-	fclose (mi);
-
-	log ("bootchart-collector has %stmpfs on /dev\n", ret ? "" : "no ");
-	return ret;
-}
-
-/*
- * If we were started during the initrd, (some initrds replace
- * 'init' with bootchartd (strangely) -but- we have no
- * init=/sbin/bootchartd, no-one will be started in the
- * main-system to stop logging, so we'll run forever; urk !
- */
-static int
-sanity_check_initrd (void)
-{
-	FILE *cmdline;
-	char buffer[4096];
-
-	cmdline = fopen (PROC_PATH "/cmdline", "r");
-	if (!cmdline) {
-		log ("Urk ! no" PROC_PATH "/cmdline on a linux system !?\n");
-		return 1;
-	}
-	assert (NULL != fgets (buffer, sizeof (buffer), cmdline));
-	fclose (cmdline);
-
-	if (!strstr (buffer, "init=") ||
-	    !strstr (buffer, "bootchartd")) {
-		log ("Urk ! can't find bootchartd on the cmdline\n");
-		return 1;
-	}
-
-	return 0;
-}
-
-/*
- * We cannot rely on a generic Linux knowing that we need have
- * our special TMPFS_PATH move mounted into the running system
- * in order to cleanup the initrd. Soo ... we do that ourselves
- * when we think the time is right. We do this by leaching off
- * the /dev/ mount which is always (often?) move mounted into the
- * running system...
- */
-static int
-chroot_into_dev (void)
-{
-	log ("bootchart-collector - migrating into /dev/\n");
-
-	if (mkdir (MOVE_DEV_PATH, 0777)) {
-		if (errno != EEXIST) {
-			log ("bootchart-collector - failed to create "
-				 MOVE_DEV_PATH " move mount-point: '%s'\n", strerror (errno));
-			return 1;
-		}
-	}
-	if (mount (TMPFS_PATH, MOVE_DEV_PATH, NULL, MS_MGC_VAL | MS_MOVE, NULL)) {
-		log ("bootchart-collector - mount failed: '%s'\n", strerror (errno));
-		return 1;
-	}
-	if (chroot (MOVE_DEV_PATH)) {
-		log ("bootchart-collector - chroot failed: '%s'\n", strerror (errno));
-		return 1;
-	}
-	return 0;
-}
 
 static void
 usage (void)
@@ -718,6 +699,11 @@ static void
 term_handler (int sig)
 {
 	int ret = 0;
+	
+	if ( SIGINT == sig ){
+		keep_running = 0;
+		return;
+	}
 
 	if (unlink (TMPFS_PATH "/kmsg") < 0)
 		ret = 1;
@@ -727,6 +713,9 @@ term_handler (int sig)
 
 	if (umount2 (TMPFS_PATH, MNT_DETACH) < 0)
 		ret = 1;
+	
+	
+	printf("Term sig : %d\n",sig);
 
 	_exit(ret == 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 }
@@ -822,7 +811,7 @@ int main (int argc, char *argv[])
 {
 	Arguments args;
 	int i, use_taskstat;
-	int in_initrd = 0, clean_environment = 1;
+	int clean_environment = 1;
 	int stat_fd, disk_fd, uptime_fd, meminfo_fd,  pid, ret = 1;
 	PidScanner *scanner = NULL;
 	unsigned long reltime = 0;
@@ -830,6 +819,7 @@ int main (int argc, char *argv[])
 	PidEventClosure pid_ev_cl;
 	int *fds[] = { &stat_fd, &disk_fd, &uptime_fd, &meminfo_fd, NULL };
 	const char *fd_names[] = { "/stat", "/diskstats", "/uptime", "/meminfo", NULL };
+	
 	StackMap map = STACK_MAP_INIT; /* make me findable */
 
 	arguments_set_defaults (&args);
@@ -840,12 +830,13 @@ int main (int argc, char *argv[])
 		return 0;
 	}
 
-	signal(SIGHUP, SIG_IGN);
+	//signal(SIGHUP, SIG_IGN);
 
 	if (enter_environment (args.console_debug))
 		return 1;
 
 	setup_sigaction(SIGTERM);
+	setup_sigaction(SIGINT);
 
 	log ("bootchart-collector started as pid %d with %d args:\n",
 		 (int) getpid(), argc - 1);
@@ -863,12 +854,6 @@ int main (int argc, char *argv[])
 		if (!ret)
 			cleanup_dev ();
 		goto exit;
-	}
-
-	if (!args.relative_time) { /* manually started */
-		in_initrd = am_in_initrd ();
-		if (in_initrd && sanity_check_initrd ())
-			goto exit;
 	}
 
 	pid = bootchart_find_running_pid (NULL);
@@ -898,6 +883,7 @@ int main (int argc, char *argv[])
 		strcat (path, fd_names[i]);
 
 		*fds[i] = open (path, O_RDONLY);
+		printf("open : %s\n",path);
 		if (*fds[i] < 0) {
 			log ("error opening '%s': %s'\n",
 				 path, strerror (errno));
@@ -934,22 +920,23 @@ int main (int argc, char *argv[])
 			exit (1);
 	}
 
-	while (1) {
+
+	// beim start einmal die pids scannen und die taskstats aufzeichnen
+	// später werden die dann von den werten abgezogen
+	pid_scanner_restart (scanner);
+	while ((pid = pid_scanner_next (scanner))) {
+
+		init_startup_taskstat( scanner );
+	}
+
+	
+	while (keep_running == 1) {
 		pid_t pid;
 		char uptime[80];
 		size_t uptimelen;
 		unsigned long u;
 
-		if (in_initrd) {
-			if (have_dev_tmpfs ()) {
-				if (chroot_into_dev ()) {
-					log ("failed to chroot into /dev - exiting so run_init can proceed\n");
-					return 1;
-				}
-				in_initrd = 0;
-			}
-		}
-      
+		
 		u = get_uptime (uptime_fd);
 		if (!u)
 			return 1;
@@ -974,6 +961,37 @@ int main (int argc, char *argv[])
 		buffer_file_append (per_pid_file, "\n", 1);
 
 		usleep (1000000 / args.hz);
+	}
+	
+	if ( keep_running == 0 ){
+		printf("End\n");
+		
+		system("rm -rf out");
+		system("mkdir out");
+		
+		dump_header("out/");
+		
+		size_t bytes_dumped = 0;
+		
+		char path[200];
+
+		ws_list_iterator_start( map.chunk_list );
+	  
+		Chunk *c; 
+		while( ( c = ws_list_iterator_next( map.chunk_list ) ) ){
+			sprintf(path, "out/%s",c->dest_stream);
+			//printf("dest : %s\n",path);
+			
+			FILE *output = fopen (path, "a+");
+			fwrite (c->data, 1, c->length, output);
+			bytes_dumped += c->length;
+			fclose (output);
+		}
+		log ("wrote %ld kb\n", (long)(bytes_dumped+1023)/1024);
+		
+		system("cd out ; tar -cvf ../out.tar.gz *");
+	
+		exit(0);
 	}
 
 	/*

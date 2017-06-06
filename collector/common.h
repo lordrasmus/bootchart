@@ -22,6 +22,8 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 
+#include <inttypes.h>
+
 #include <fcntl.h>
 #include <errno.h>
 #include <stdio.h>
@@ -36,6 +38,7 @@
 #include <pthread.h>
 
 #include "macro.h"
+#include "linked_list.h"
 
 /* Magic path we mount our tmpfs on, inside which we do everything */
 #define TMPFS_PATH PKGLIBDIR "/tmpfs"
@@ -80,10 +83,11 @@ typedef struct {
 
 typedef struct {
 	char   magic[sizeof (STACK_MAP_MAGIC)];
-	Chunk *chunks[1024];
-	int    max_chunk;
+	//Chunk *chunks[1024];
+	list_t      *chunk_list;
+	uint32_t    cur_chunk;
 } StackMap;
-#define STACK_MAP_INIT { STACK_MAP_MAGIC, { 0, }, 0 }
+#define STACK_MAP_INIT { STACK_MAP_MAGIC }
 
 typedef struct {
 	StackMap   *sm;

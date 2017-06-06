@@ -324,12 +324,36 @@ netlink_pid_scanner_get_tasks_stop (PidScanner *scanner)
 	nls->cur_thread = 0;
 }
 
+static char def_text[100];
+static char* get_event_name( struct proc_event *ev ){
+     switch (ev->what) {
+	case PROC_EVENT_NONE: return "PROC_EVENT_NONE";
+        case PROC_EVENT_FORK: return "PROC_EVENT_FORK";
+        case PROC_EVENT_UID: return "PROC_EVENT_UID";
+	case PROC_EVENT_GID: return "PROC_EVENT_GID";
+	case PROC_EVENT_SID: return "PROC_EVENT_SID";
+	case PROC_EVENT_PTRACE: return "PROC_EVENT_PTRACE";
+	case PROC_EVENT_COMM: return "PROC_EVENT_COMM";
+	case PROC_EVENT_COREDUMP: return "PROC_EVENT_COREDUMP";
+        case PROC_EVENT_EXEC: return "PROC_EVENT_EXEC";
+	case PROC_EVENT_EXIT:return "PROC_EVENT_EXIT";
+        default:
+		sprintf(def_text, "unknown event: 0x%X",ev->what);
+		return def_text;
+    }
+		
+    return "unknown event ";
+	
+}
+
 static void 
 handle_news (NetLinkPidScanner *nls, struct cn_msg *cn_hdr)
 {
 	struct proc_event *ev;
 
         ev = (struct proc_event*)cn_hdr->data;
+	
+	//printf("handle_news : %s \n",get_event_name(ev));
 
         switch (ev->what) {
         case PROC_EVENT_FORK:

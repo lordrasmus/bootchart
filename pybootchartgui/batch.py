@@ -17,6 +17,8 @@ import cairo
 from . import draw
 from .draw import RenderOptions
 
+from pprint import pprint
+
 def render(writer, trace, app_options, filename):
     handlers = {
         "png": (lambda w, h: cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h), \
@@ -25,6 +27,7 @@ def render(writer, trace, app_options, filename):
         "svg": (lambda w, h: cairo.SVGSurface(filename, w, h), lambda sfc: 0)
     }
 
+    pprint( app_options.format )
     if app_options.format is None:
         fmt = filename.rsplit('.', 1)[1]
     else:
@@ -38,6 +41,8 @@ def render(writer, trace, app_options, filename):
     options = RenderOptions (app_options)
     (w, h) = draw.extents (options, 1.0, trace)
     w = max (w, draw.MIN_IMG_W)
+    pprint( w )
+    pprint( h )
     surface = make_surface (w, h)
     ctx = cairo.Context (surface)
     draw.render (ctx, options, 1.0, trace)
